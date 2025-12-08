@@ -28,7 +28,7 @@ jobs:
         uses: tj-actions/changed-files@v45
         with:
           files: '**.md'  # 마크다운 파일만 감시
-          status: 'added' # '수정'된 건 무시하고 '새로 추가'된 것만 찾음
+          status_filter: 'added' # '수정'된 건 무시하고 '새로 추가'된 것만 찾음
 
       - name: Discussions에 글 발행하기 (Publish Discussion Post)
         # GitHub CLI 대신 안정적인 전용 Action 사용
