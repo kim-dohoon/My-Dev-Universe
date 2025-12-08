@@ -1,0 +1,17 @@
+# Mac 시스템 파일
+.DS_Store
+
+# Python 가상환경 폴더 (용량 크고 필요 없음)
+venv/
+.venv/
+env/
+
+# 환경변수 및 API 키 파일 (절대 공개 금지!!)
+.env
+secrets.py
+config.py
+key.json
+
+# 파이썬 캐시 파일
+__pycache__/
+*.pyc
