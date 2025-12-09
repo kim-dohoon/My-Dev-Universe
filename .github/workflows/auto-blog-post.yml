@@ -1,7 +1,5 @@
 name: 자동 포스팅 (Auto Publish to Discussions)
 
-# 언제 실행할까요?
-# main 브랜치에 '마크다운(.md)' 파일이 push 되었을 때만!
 on:
   push:
     branches:
@@ -9,7 +7,6 @@ on:
     paths:
       - '**.md'
 
-# 권한 설정 (게시판에 글을 써야 하니까 write 권한 필요)
 permissions:
   contents: write
   discussions: write
@@ -21,21 +18,89 @@ jobs:
       - name: 코드 가져오기 (Checkout Code)
         uses: actions/checkout@v4
         with:
-          fetch-depth: 0 
+          fetch-depth: 0
+          submodules: false
 
       - name: 새로 추가된 파일 찾기 (Find Added Files)
         id: changed-files
         uses: tj-actions/changed-files@v45
         with:
-          files: '**.md'  # 마크다운 파일만 감시
-          status_filter: 'added' # 최종 수정: 'status' -> 'status_filter'
+          files: '**.md'
+          # status_filter 옵션 삭제 (출력 변수로만 확인하면 됩니다)
 
       - name: Discussions에 글 발행하기 (Publish Discussion Post)
-        # GitHub CLI 대신 안정적인 전용 Action 사용
-        uses: sergey-pr/gh-action-discussion@v1 
+        uses: actions/github-script@v7
         with:
-          files: ${{ steps.changed-files.outputs.added_files }}
-          category: General
-          title-from-path: true
-        env:
-          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          github-token: ${{ secrets.GITHUB_TOKEN }}
+          script: |
+            // 1. 새로 추가된 파일 목록 가져오기
+            const added_files = '${{ steps.changed-files.outputs.added_files }}';
+            
+            if (!added_files) {
+              console.log('새로 추가된 파일이 없습니다 (No new files).');
+              return;
+            }
+
+            const files = added_files.split(' ');
+            const fs = require('fs');
+
+            // 2. 리포지토리 ID와 'General' 카테고리 ID 찾기
+            const query = `
+              query($owner:String!, $name:String!) {
+                repository(owner:$owner, name:$name) {
+                  id
+                  discussionCategories(first:10) {
+                    nodes {
+                      id
+                      name
+                    }
+                  }
+                }
+              }
+            `;
+            const variables = {
+              owner: context.repo.owner,
+              name: context.repo.repo
+            };
+            
+            const result = await github.graphql(query, variables);
+            const repoId = result.repository.id;
+            // 'General' 카테고리를 찾고, 없으면 첫 번째 카테고리 사용
+            const category = result.repository.discussionCategories.nodes.find(n => n.name === 'General');
+            const categoryId = category ? category.id : result.repository.discussionCategories.nodes[0].id;
+
+            console.log(`Repository ID: ${repoId}, Category ID: ${categoryId}`);
+
+            // 3. 각 파일에 대해 글 발행 (GraphQL Mutation)
+            for (const file of files) {
+              if (!file || file.trim() === '') continue;
+              
+              const title = file.split('/').pop().replace('.md', '');
+              let body = '';
+              
+              try {
+                body = fs.readFileSync(file, 'utf8');
+              } catch (e) {
+                console.log(`파일을 읽을 수 없습니다: ${file}`);
+                continue;
+              }
+              
+              const mutation = `
+                mutation($repositoryId:ID!, $categoryId:ID!, $title:String!, $body:String!) {
+                  createDiscussion(input: {repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body}) {
+                    discussion {
+                      url
+                    }
+                  }
+                }
+              `;
+              
+              const response = await github.graphql(mutation, {
+                repositoryId: repoId,
+                categoryId: categoryId,
+                title: title,
+                body: body
+              });
+              
+              console.log(`✅ 발행 완료 (Published): ${title} - ${response.createDiscussion.discussion.url}`);
+            }
