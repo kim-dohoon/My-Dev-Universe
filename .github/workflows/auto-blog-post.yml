@@ -7,12 +7,13 @@ on:
     paths:
       - '**.md'
 
+permissions:
+  contents: write
+  discussions: write
+
 jobs:
   publish-discussion:
     runs-on: ubuntu-latest
-    permissions:
-      contents: write
-      discussions: write
     steps:
       - name: 코드 가져오기 (Checkout Code)
         uses: actions/checkout@v4
@@ -25,79 +26,52 @@ jobs:
         uses: tj-actions/changed-files@v45
         with:
           files: '**.md'
-          # ⚠️ 중요: 여기에 있던 'status' 또는 'status_filter' 줄을 완전히 삭제했습니다.
-          # 이제 오류가 발생하지 않습니다.
+          json: true # 👈 중요: 파일 이름을 안전한 JSON 형식으로 출력
 
       - name: Discussions에 글 발행하기 (Publish Discussion Post)
         uses: actions/github-script@v7
         with:
           github-token: ${{ secrets.GITHUB_TOKEN }}
           script: |
-            // 1. 새로 추가된 파일 목록 가져오기 (Added Files)
-            // 위 단계에서 옵션을 뺐어도 outputs.added_files는 정상적으로 동작합니다.
-            const added_files = '${{ steps.changed-files.outputs.added_files }}';
+            // 1. JSON 형식으로 파일 목록 가져오기 (띄어쓰기 문제 해결)
+            const files = ${{ steps.changed-files.outputs.added_files }};
             
-            if (!added_files) {
+            if (!files || files.length === 0) {
               console.log('새로 추가된 파일이 없습니다 (No new files).');
               return;
             }
 
-            const files = added_files.split(' ');
             const fs = require('fs');
 
-            // 2. 리포지토리 정보 가져오기
-            const query = `
-              query($owner:String!, $name:String!) {
-                repository(owner:$owner, name:$name) {
-                  id
-                  discussionCategories(first:10) {
-                    nodes {
-                      id
-                      name
-                    }
-                  }
-                }
-              }
-            `;
-            const variables = {
-              owner: context.repo.owner,
-              name: context.repo.repo
-            };
-            
+            // 2. 리포지토리 및 카테고리 ID 조회
+            const query = `query($owner:String!, $name:String!) { repository(owner:$owner, name:$name) { id discussionCategories(first:10) { nodes { id name } } } }`;
+            const variables = { owner: context.repo.owner, name: context.repo.repo };
             const result = await github.graphql(query, variables);
             const repoId = result.repository.id;
             const category = result.repository.discussionCategories.nodes.find(n => n.name === 'General');
             const categoryId = category ? category.id : result.repository.discussionCategories.nodes[0].id;
 
-            // 3. 글 발행 (GraphQL Mutation)
+            // 3. 글 발행 로직
             for (const file of files) {
               if (!file || file.trim() === '') continue;
               
+              // 파일 이름에서 확장자(.md) 제거
               const title = file.split('/').pop().replace('.md', '');
               let body = '';
+              
               try {
                 body = fs.readFileSync(file, 'utf8');
               } catch (e) {
-                console.log(`파일을 읽을 수 없습니다: ${file}`);
+                console.log(`❌ 파일을 읽을 수 없습니다 (Skipped): ${file}`);
                 continue;
               }
               
-              const mutation = `
-                mutation($repositoryId:ID!, $categoryId:ID!, $title:String!, $body:String!) {
-                  createDiscussion(input: {repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body}) {
-                    discussion {
-                      url
-                    }
-                  }
-                }
-              `;
+              const mutation = `mutation($repositoryId:ID!, $categoryId:ID!, $title:String!, $body:String!) { createDiscussion(input: {repositoryId: $repositoryId, categoryId: $categoryId, title: $title, body: $body}) { discussion { url } } }`;
               
-              const response = await github.graphql(mutation, {
-                repositoryId: repoId,
-                categoryId: categoryId,
-                title: title,
-                body: body
-              });
-              
-              console.log(`✅ 발행 완료: ${title} - ${response.createDiscussion.discussion.url}`);
+              try {
+                const response = await github.graphql(mutation, { repositoryId: repoId, categoryId: categoryId, title: title, body: body });
+                console.log(`✅ 발행 완료: ${title} - ${response.createDiscussion.discussion.url}`);
+              } catch (error) {
+                console.log(`❌ 발행 실패 (API Error): ${error.message}`);
+              }
             }
